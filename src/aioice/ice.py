@@ -10,13 +10,13 @@ import secrets
 import socket
 import threading
 from collections.abc import Callable
-from typing import Optional, Union, cast
+from typing import Optional, Union, Iterable, cast
 
 import ifaddr
 
 from . import mdns, stun, turn
 from .candidate import Candidate, candidate_foundation, candidate_priority
-from .utils import random_string
+from .utils import create_datagram_endpoint, random_string
 
 logger = logging.getLogger(__name__)
 
@@ -360,6 +360,7 @@ class Connection:
                            will be generated.
     :param local_password: An optional local password, otherwise a random one
                            will be generated.
+    :param ephemeral_ports: Set of allowed ephemeral local ports to bind to.
     """
 
     def __init__(
@@ -377,6 +378,7 @@ class Connection:
         transport_policy: TransportPolicy = TransportPolicy.ALL,
         local_username: Optional[str] = None,
         local_password: Optional[str] = None,
+        ephemeral_ports: Optional[Iterable[int]] = None,
     ) -> None:
         self.ice_controlling = ice_controlling
 
@@ -433,6 +435,7 @@ class Connection:
         self._tie_breaker = secrets.randbits(64)
         self._use_ipv4 = use_ipv4
         self._use_ipv6 = use_ipv6
+        self._ephemeral_ports = ephemeral_ports
 
         if (
             stun_server is None
@@ -973,16 +976,14 @@ class Connection:
         self, component: int, addresses: list[str], timeout: int = 5
     ) -> list[Candidate]:
         candidates = []
-        loop = asyncio.get_event_loop()
 
         # gather host candidates
         host_protocols = []
         for address in addresses:
             # create transport
             try:
-                transport, protocol = await loop.create_datagram_endpoint(
-                    lambda: StunProtocol(self), local_addr=(address, 0)
-                )
+                transport, protocol = await create_datagram_endpoint(
+                    lambda: StunProtocol(self), local_address=address, local_ports=self._ephemeral_ports)
                 sock = transport.get_extra_info("socket")
                 if sock is not None:
                     sock.setsockopt(
